@@ -1,0 +1,10 @@
+[package]
+name = "chip8-emu"
+version = "0.1.0"
+authors = ["Bernard Riemann"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+pixel-canvas = "0.2.1"
