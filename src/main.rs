@@ -93,8 +93,8 @@ impl Chip8State {
             0x7000 => { 
                          let varnum = get_0x00(opcode);
                          let num = get_00nn(opcode);
-                         println!("{:#06x} v{:#03x} += {:#x}", opcode, varnum, num);
                          self.v[varnum] += num;
+                         println!("{:#06x} v{:#03x} += {:#x} (now {:#03x})", opcode, varnum, num, self.v[varnum]);
                       },
             0x8000 => match opcode & 0xf00f {
                          0x8000 => println!("{:#06x} variable assignment", opcode),
@@ -138,34 +138,35 @@ fn main() -> io::Result<()> {
     file.read(&mut memo[0x200..])?; // maybe we need an offset here!, 0x200?
 
     let mut chip = Chip8State::init();
-
-    let mut count = 0;
     let mut address: u16 = 0x200;
-    loop
-    {
-        println!("  instr {} at address {:#03x}", count, address);
-        let addr_new = chip.run_address(&memo, address);
-        if addr_new==0x1000 {
-            address += 2;  // standard flow
-        } else {
-            address = addr_new;
-        }
 
-        count += 1;
-        if count > 50
-        {
-            break;
-        }
-    }
+    //let mut count = 0;
+    //loop
+    //{
+    //    println!("  instr {} at address {:#03x}", count, address);
+    //    address = chip.run_address(&memo, address);
+
+    //    count += 1;
+    //    if count > 50
+    //    {
+    //        break;
+    //    }
+    //}
 
     let canvas = Canvas::new(512, 512)
         .title(filename)
         .state(MouseState::new());
         //.input(MouseState::handle_input);
 
-    canvas.render ( |mouse, image| {
+    let mut c = 0;
 
-      block_draw(image, 50+0*(mouse.x as u8), 80,30,40);
+    canvas.render ( move |mouse, image| {
+      if c % 32 == 0 {
+        println!("  address {:#03x}", address);
+        address = chip.run_address(&memo, address);
+        block_draw(image, 50+0*(mouse.x as u8), 80,30,40);
+      }
+      c += 1;
     } );
 
     Ok(())
