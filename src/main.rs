@@ -1,32 +1,12 @@
+extern crate sdl2;
+
 use std::io;
 use std::io::prelude::*;
 use std::fs::File;
 
 // graphics part
-use pixel_canvas::{Canvas, Color, input::MouseState, image::Image};
-
-fn sprite_draw(im: &mut Image, x0: u8, y0: u8, w: u8, h: u8) {
-    // ToDo: draw actual sprites
-    let fg = Color { r: 240, g: 255, b: 255 };
-    let wd = im.width() as usize;
-    let ys = y0 as usize;
-    let xs = x0 as usize;
-    for (y, row) in im.chunks_mut(wd).enumerate() {
-        if y >= ys && y < ys+(h as usize) {
-            for (x, pxl) in row.iter_mut().enumerate() {
-                if x >= xs && x < xs+(w as usize) {
-                    *pxl = fg;
-                }
-            }
-        }
-    }
-}
-
-fn clear_draw(im: &mut Image) {
-    let bg = Color { r: 10, g: 10, b: 10 };
-    im.fill(bg);
-}
-//
+use sdl2::{pixels::Color, render::Canvas, video::Window, rect::Rect};
+use std::time::Duration;
 
 struct Chip8State {
     i: u16,       // additional 16-bit address register
@@ -58,14 +38,18 @@ impl Chip8State {
         Chip8State { i: 0, v: [0; 16], delay: 0, keyboard: 0x00, drawop: 0x0000 }
     }
 
-    fn draw(&mut self, im: &mut Image) {
-        match self.drawop & 0xf000 {
-            0xe000 => clear_draw( im ), // different from orig.opcode 00e0 for faster comparison
+    fn draw(&mut self, canvas: &mut Canvas<Window>) {
+        match self.drawop & 0xf000 {// different from orig.opcode 00e0 for faster comparison
+            0xe000 => {
+                canvas.set_draw_color(Color::RGB(60,60,60));
+                canvas.clear();
+                canvas.set_draw_color(Color::RGB(240,255, 255));
+            },
             0xd000 => { // 0xdxyn draw rectangle (original opcode) 
                 let varxnum = get_0x00(self.drawop);
                 let varynum = get_00y0(self.drawop);
-                let height = (self.drawop & 0x000f) as u8 + 1;
-                sprite_draw( im,  self.v[varxnum], self.v[varynum], 8, height);
+                let h = (self.drawop & 0x000f) as u8 + 1;
+                canvas.fill_rect(Rect::new(self.v[varxnum] as i32, self.v[varynum] as i32, 8, h as u32)).unwrap();
             },
             _ => panic!("unknown draw operation. skip over all entries not 0xe... or 0xd..."),
         }
@@ -208,8 +192,7 @@ fn main() -> io::Result<()> {
     //let bu = file.read(&mut memo)?; // maybe we need an offset here!, 0x200?
     file.read(&mut memo[0x200..])?; // maybe we need an offset here!, 0x200?
 
-    let mut chip = Chip8State::init();
-    let mut address: u16 = 0x200;
+
 
     //let mut count = 0;
     //loop
@@ -224,31 +207,43 @@ fn main() -> io::Result<()> {
     //    }
     //}
 
-    let canvas = Canvas::new(512, 512)
-        .title(filename)
-        .show_ms(true)
-        .state(MouseState::new());
-        //.input(MouseState::handle_input);
+    let sdl_context = sdl2::init().unwrap();
+    let video = sdl_context.video().unwrap();
+    let window = video.window(filename, 512, 512)
+        .position_centered()
+        .build()
+        .unwrap();
 
-    // let mut c = 0;
+    let mut canvas = window.into_canvas().build().unwrap();
 
-    canvas.render ( move |mouse, image| {
-      if chip.delay > 0 {
-        chip.delay -= 1;
-        return;
-      }
 
-      while chip.drawop == 0x0000 {
-        print!("  address {:#03x} {}", address, mouse.x);
-        address = chip.run_address(&memo, address);
-        // c += 1;
-      }
-      
-      // println!("processed {} instructions since last draw", c);
-      chip.draw(image);
-      // c = 0;
-    } );
+    let mut chip = Chip8State::init();
 
+    chip.drawop = 0xe000; // clear screen drawing command
+    chip.draw(&mut canvas);
+
+    canvas.present();
+
+    let mut address: u16 = 0x200;
+    let mut count = 0;
+    while count < 5000 {
+        ::std::thread::sleep(Duration::new(0, 20_000_000u32)); // 20ms
+    
+        if chip.delay > 0 {
+          chip.delay -= 1;
+          continue;
+        }
+
+        while chip.drawop == 0x0000 {
+          print!("  address {:#03x} ", address);
+          address = chip.run_address(&memo, address);
+          count += 1;
+        }
+        
+        // println!("processed {} instructions since last draw", c);
+        chip.draw(&mut canvas);
+        canvas.present();
+    }
 
     Ok(())
 }
