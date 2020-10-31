@@ -6,6 +6,7 @@ use std::fs::File;
 use pixel_canvas::{Canvas, Color, input::MouseState, image::Image};
 
 fn block_draw(im: &mut Image, x0: u8, y0: u8, w: u8, h: u8) {
+    let fg = Color { r: 240, g: 255, b: 255 };
     let wd = im.width() as usize;
     let ys = y0 as usize;
     let xs = x0 as usize;
@@ -13,18 +14,23 @@ fn block_draw(im: &mut Image, x0: u8, y0: u8, w: u8, h: u8) {
         if y >= ys && y < ys+(h as usize) {
             for (x, pxl) in row.iter_mut().enumerate() {
                 if x >= xs && x < xs+(w as usize) {
-                    *pxl = Color { r: 255, g: 255, b: 255 };
+                    *pxl = fg;
                 }
             }
         }
     }
 }
+
+fn clear_draw(im: &mut Image) {
+    let bg = Color { r: 10, g: 10, b: 10 };
+    im.fill(bg);
+}
 //
 
 struct Chip8State {
-    // ToDo: change usize to u16 for n and i
     i: u16, // additional 16-bit address register
-    v: [u8; 16] // variables v0 -- vF
+    v: [u8; 16], // variables v0 -- vF
+    drawop: u16 // custom: indicate if the content needs to be drawn, and what is drawn. see draw method.
 }
 
 
@@ -46,16 +52,33 @@ fn get_00nn(opcode: u16) -> u8 {
 
 impl Chip8State {
     fn init() -> Chip8State {
-        Chip8State { i: 0, v: [0; 16] }
+        Chip8State { i: 0, v: [0; 16], drawop: 0x0000 }
     }
 
-    fn run_address(&mut self, memo: &[u8; 4096], address: u16, im: &mut Image) -> u16 {
+    fn draw(&mut self, im: &mut Image) {
+        match self.drawop & 0xf000 {
+            0xe000 => clear_draw( im ), // different from orig.opcode 00e0 for faster comparison
+            0xd000 => { // 0xdxyn draw rectangle (original opcode) 
+                let varxnum = get_0x00(self.drawop);
+                let varynum = get_00y0(self.drawop);
+                let height = (self.drawop & 0x000f) as u8;
+                block_draw( im,  self.v[varxnum], self.v[varynum], 8, height);
+            },
+            _ => panic!("unknown draw operation. skip over all entries not 0xe... or 0xd..."),
+        }
+        self.drawop = 0x0000;
+    }
+
+    fn run_address(&mut self, memo: &[u8; 4096], address: u16) -> u16 {
         let uaddr = usize::from(address);
         let opcode = get_opcode(memo[uaddr], memo[uaddr+1]);
 
         match opcode & 0xf000 {
             0x0000 => match opcode {
-                         0x00e0 => println!("{:#06x} clear screen", opcode),
+                         0x00e0 => { 
+                             self.drawop = 0xe000;
+                             println!("{:#06x} CLEAR DRAW", opcode);
+                         },
                          0x00ee => println!("{:#06x} return", opcode),
                          _ => panic!("{:#06x} call RCA 1802 routine {:#05x}: not implemented", opcode, opcode & 0x0fff),
                       },
@@ -67,7 +90,7 @@ impl Chip8State {
             0x2000 => { 
                          let nother = opcode & 0x0fff;
                          println!("{:#06x} run subroutine at {:#05x}", opcode, nother);
-                         if self.run_address(memo, nother, im) != nother+2 {
+                         if self.run_address(memo, nother) != nother+2 {
                              panic!("no recursion support.");
                          }
                       },
@@ -120,11 +143,9 @@ impl Chip8State {
                         println!("{:#06x} v{:#03x} = rand() & {:#04x} (now {:#04x})", opcode, varnum, num, self.v[varnum]);
                       },
             0xd000 => { 
-                        let varxnum = get_0x00(opcode);
-                        let varynum = get_00y0(opcode);
-                        let height = (opcode & 0x000f) as u8;
-                        block_draw( im,  self.v[varxnum], self.v[varynum], 8, height);
-                        println!("{:#06x} DRAW", opcode); },
+                        self.drawop = opcode;
+                        println!("{:#06x} DRAW", opcode);
+                      },
             0xf000 => match opcode & 0xf0ff {
                          0xf01e => {
                            let varnum = get_0x00(opcode);
@@ -177,14 +198,14 @@ fn main() -> io::Result<()> {
     let mut c = 0;
 
     canvas.render ( move |mouse, image| {
-      //if c % 2 == 0 {
+      while chip.drawop == 0x0000 {
         print!("  address {:#03x} {}", address, mouse.x);
-        address = chip.run_address(&memo, address, image);
-      //}
-      if c % 256 == 0 {
-        println!("processed {} instructions", c);
+        address = chip.run_address(&memo, address);
+        c += 1;
       }
-      c += 1;
+      println!("processed {} instructions since last draw", c);
+      chip.draw(image);
+      c = 0;
     } );
 
 
