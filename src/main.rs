@@ -5,7 +5,8 @@ use std::fs::File;
 // graphics part
 use pixel_canvas::{Canvas, Color, input::MouseState, image::Image};
 
-fn block_draw(im: &mut Image, x0: u8, y0: u8, w: u8, h: u8) {
+fn sprite_draw(im: &mut Image, x0: u8, y0: u8, w: u8, h: u8) {
+    // ToDo: draw actual sprites
     let fg = Color { r: 240, g: 255, b: 255 };
     let wd = im.width() as usize;
     let ys = y0 as usize;
@@ -28,9 +29,11 @@ fn clear_draw(im: &mut Image) {
 //
 
 struct Chip8State {
-    i: u16, // additional 16-bit address register
-    v: [u8; 16], // variables v0 -- vF
-    drawop: u16 // custom: indicate if the content needs to be drawn, and what is drawn. see draw method.
+    i: u16,       // additional 16-bit address register
+    v: [u8; 16],  // variables v0 -- vF
+    delay: u8,    // delay timer
+    keyboard: u8, // hex keyboard
+    drawop: u16   // custom: indicate if the content needs to be drawn, and what is drawn. see draw method.
 }
 
 
@@ -52,7 +55,7 @@ fn get_00nn(opcode: u16) -> u8 {
 
 impl Chip8State {
     fn init() -> Chip8State {
-        Chip8State { i: 0, v: [0; 16], drawop: 0x0000 }
+        Chip8State { i: 0, v: [0; 16], delay: 0, keyboard: 0x00, drawop: 0x0000 }
     }
 
     fn draw(&mut self, im: &mut Image) {
@@ -61,8 +64,8 @@ impl Chip8State {
             0xd000 => { // 0xdxyn draw rectangle (original opcode) 
                 let varxnum = get_0x00(self.drawop);
                 let varynum = get_00y0(self.drawop);
-                let height = (self.drawop & 0x000f) as u8;
-                block_draw( im,  self.v[varxnum], self.v[varynum], 8, height);
+                let height = (self.drawop & 0x000f) as u8 + 1;
+                sprite_draw( im,  self.v[varxnum], self.v[varynum], 8, height);
             },
             _ => panic!("unknown draw operation. skip over all entries not 0xe... or 0xd..."),
         }
@@ -123,36 +126,68 @@ impl Chip8State {
                          self.v[varnum] = self.v[varnum].wrapping_add(num);
                          println!("{:#06x} v{:#03x} += {:#04x} (now {:#04x})", opcode, varnum, num, self.v[varnum]);
                       },
-            0x8000 => match opcode & 0xf00f {
-                         0x8000 => println!("{:#06x} variable assignment", opcode),
-                         0x8001 => println!("{:#06x} bitwise |", opcode),
-                         0x8002 => println!("{:#06x} bitwise &", opcode),
-                         0x8003 => println!("{:#06x} bitwise ^(xor)", opcode),
-                         0x8004 => println!("{:#06x} +=", opcode),
-                         0x8005 => println!("{:#06x} -=", opcode),
-                         0x8006 => println!("{:#06x} Vx>>=1", opcode),
-                         0x8007 => println!("{:#06x} Vx=Vy-Vx", opcode),
-                         0x800e => println!("{:#06x} Vx<<=1", opcode),
-                         _ => panic!("{:06x} unknown opcode!", opcode),
+            0x8000 => {  let varxnum = get_0x00(self.drawop);
+                         let varynum = get_00y0(self.drawop);
+                         match opcode & 0xf00f {
+                           0x8000 => { self.v[varxnum]  = self.v[varynum];
+                                       println!("{:#06x} v{:#03x} = v{:#03x}", opcode, varxnum, varynum); },
+                           0x8001 => { self.v[varxnum]  = self.v[varxnum] | self.v[varynum];
+                                       println!("{:#06x} v{:#03x} = v{:#03x} | v{:#03x}", opcode, varxnum, varxnum, varynum); },
+                           0x8002 => { self.v[varxnum]  = self.v[varxnum] & self.v[varynum];
+                                       println!("{:#06x} v{:#03x} = v{:#03x} & v{:#03x}", opcode, varxnum, varxnum, varynum); },
+                           0x8003 => { self.v[varxnum]  = self.v[varxnum] ^ self.v[varynum];
+                                       println!("{:#06x} v{:#03x} = v{:#03x} ^ v{:#03x}", opcode, varxnum, varxnum, varynum); },
+                           0x8004 => { self.v[varxnum]  = self.v[varxnum].wrapping_add( self.v[varynum] );
+                                       println!("{:#06x} v{:#03x} += v{:#03x}", opcode, varxnum, varynum); },
+                           0x8005 => { self.v[varxnum]  = self.v[varxnum].wrapping_sub( self.v[varynum] );
+                                       println!("{:#06x} v{:#03x} -= v{:#03x}", opcode, varxnum, varynum); },
+                           // 0x8006 => println!("{:#06x} Vx>>=1", opcode),
+                           0x8007 => { self.v[varxnum]  = self.v[varynum].wrapping_sub( self.v[varxnum] );
+                                       println!("{:#06x} v{:#03x} = v{:#03x} - v{:#03x}", opcode, varxnum, varynum, varxnum); },
+                           // 0x800e => println!("{:#06x} Vx<<=1", opcode),
+                           _ => panic!("{:06x} unknown opcode!", opcode),
+                         }
                       },
-            0xa000 => { self.i = opcode & 0x0fff; println!("{:#06x} i = {:#05x}", opcode, self.i); },
-            0xc000 => { 
-                        let varnum = get_0x00(opcode);
+            0xa000 => {  self.i = opcode & 0x0fff;
+                         println!("{:#06x} i = {:#05x}", opcode, self.i); },
+            0xc000 => { let varnum = get_0x00(opcode);
                         let num = get_00nn(opcode);
                         self.v[varnum] = rand::random::<u8>() & num;
                         println!("{:#06x} v{:#03x} = rand() & {:#04x} (now {:#04x})", opcode, varnum, num, self.v[varnum]);
                       },
-            0xd000 => { 
-                        self.drawop = opcode;
+            0xd000 => { self.drawop = opcode;
                         println!("{:#06x} DRAW", opcode);
                       },
+            0xe000 => match opcode  & 0xf0ff {
+                         0xe09e => {
+                           let varnum = get_0x00(opcode);
+                           println!("{:#06x} if (v{:#03x} == keyboard) skip next", opcode, varnum);
+                           if self.keyboard == self.v[varnum] { return address+4; }
+                         },
+                         0xe0a1 => {
+                           let varnum = get_0x00(opcode);
+                           println!("{:#06x} if (v{:#03x} != keyboard) skip next", opcode, varnum);
+                           if self.keyboard != self.v[varnum] { return address+4; }
+                         },
+                         _ => panic!("{:06x} unknown opcode!", opcode),
+                      },
             0xf000 => match opcode & 0xf0ff {
+                         0xf007 => {
+                           let varnum = get_0x00(opcode);
+                           self.v[varnum] = self.delay; 
+                           println!("{:#06x} set v{:03x} to delay", opcode, varnum)
+                         },
+                         0xf015 => {
+                           let varnum = get_0x00(opcode);
+                           self.delay = self.v[varnum];
+                           println!("{:#06x} set delay to v{:#03x}", opcode, varnum)
+                         },
                          0xf01e => {
                            let varnum = get_0x00(opcode);
                            self.i += u16::from(self.v[varnum]);
                            println!("{:#06x} i += v{:#03x}", opcode, varnum)
                          },
-                         _ => println!("{:#06x} not implemented", opcode),
+                         _ => panic!("{:#06x} not implemented", opcode),
                       },
             _ => panic!("{:#06x} not implemented", opcode),
         }
@@ -195,17 +230,23 @@ fn main() -> io::Result<()> {
         .state(MouseState::new());
         //.input(MouseState::handle_input);
 
-    let mut c = 0;
+    // let mut c = 0;
 
     canvas.render ( move |mouse, image| {
+      if chip.delay > 0 {
+        chip.delay -= 1;
+        return;
+      }
+
       while chip.drawop == 0x0000 {
         print!("  address {:#03x} {}", address, mouse.x);
         address = chip.run_address(&memo, address);
-        c += 1;
+        // c += 1;
       }
-      println!("processed {} instructions since last draw", c);
+      
+      // println!("processed {} instructions since last draw", c);
       chip.draw(image);
-      c = 0;
+      // c = 0;
     } );
 
 
