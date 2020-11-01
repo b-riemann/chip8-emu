@@ -9,7 +9,7 @@ use std::fs::File;
 use rand::prelude::*;
 
 // graphics part
-use sdl2::{pixels::Color, render::Canvas, video::Window, rect::Point};
+use sdl2::{pixels::Color, render::Canvas, video::Window, rect::Point, event::Event, keyboard::Keycode};
 use std::time::Duration;
 
 struct Chip8State {
@@ -67,8 +67,8 @@ impl Chip8State {
     }
 
     fn draw(&mut self, canvas: &mut Canvas<Window>, memo: &[u8; 0xf00]) {
-        let bgcolor = Color::RGB(60,60,60);
-        let fgcolor = Color::RGB(240,255, 255);
+        let bgcolor = Color::RGB(29, 31, 33);
+        let fgcolor = Color::RGB(240, 255, 255); //Color::RGB(95, 215, 255);
         match self.drawop & 0xf000 {// different from orig.opcode 00e0 for faster comparison
             0xe000 => {
                 self.display = [false; 2048];
@@ -221,7 +221,7 @@ impl Chip8State {
             0xe000 => match opcode  & 0xf0ff {
                          0xe09e => {
                            let varnum = get_0x00(opcode);
-                           println!("if (v{:#03x} == keyboard) skip next", varnum);
+                           println!("if (v{:#03x} == keyboard) skip next (is {:#04x})", varnum, self.v[varnum]);
                            if self.keyboard == self.v[varnum] {
                              self.pc += 4;
                              return;
@@ -229,7 +229,7 @@ impl Chip8State {
                          },
                          0xe0a1 => {
                            let varnum = get_0x00(opcode);
-                           println!("if (v{:#03x} != keyboard) skip next", varnum);
+                           println!("if (v{:#03x} != keyboard) skip next (is {:#04x})", varnum, self.v[varnum]);
                            if self.keyboard != self.v[varnum] {
                              self.pc += 4;
                              return;
@@ -260,11 +260,8 @@ impl Chip8State {
                       },
             _ => panic!("{:#06x} not implemented", opcode),
         }
-
         self.pc += 2;
     }
-
-
 }
 
 fn main() -> io::Result<()> {
@@ -276,21 +273,6 @@ fn main() -> io::Result<()> {
     
     //file.read(&mut memo)?; // maybe we need an offset here!, 0x200?
     file.read(&mut memo[0x200..])?; // maybe we need an offset here!, 0x200?
-
-
-
-    //let mut count = 0;
-    //loop
-    //{
-    //    println!("  instr {} at address {:#03x}", count, address);
-    //    address = chip.run_address(&memo, address);
-
-    //    count += 1;
-    //    if count > 50
-    //    {
-    //        break;
-    //    }
-    //}
 
     let sdl_context = sdl2::init().unwrap();
     let video = sdl_context.video().unwrap();
@@ -309,20 +291,33 @@ fn main() -> io::Result<()> {
 
     canvas.present();
 
-    let mut count = 0;
-    let dur = Duration::new(0, 20_000_000u32); // 50ms
-    //let ldur = Duration::new(0, 100_000_000u32); // 500ms
+    let dur = Duration::new(0, 15_000_000u32);
+    let mut event_pump = sdl_context.event_pump().unwrap();
 
-    while count < 0xfff {
-        std::thread::sleep(dur); //if count > 0x118 {ldur} else { dur }); 
+    'maincontrolloop: loop {
     
         if chip.delay > 0 {
           chip.delay -= 1;
+          std::thread::sleep(dur);
         }
 
-        print!("{:#03x} ", count);
+        for event in event_pump.poll_iter() {
+          match event {
+              Event::KeyDown { keycode: Some(Keycode::Escape), .. }=> break 'maincontrolloop,
+              Event::KeyDown { keycode: Some(Keycode::W), .. } => chip.keyboard = 0x04,
+              Event::KeyDown { keycode: Some(Keycode::A), .. } => chip.keyboard = 0x05,
+              Event::KeyDown { keycode: Some(Keycode::D), .. } => chip.keyboard = 0x06,
+              Event::KeyDown { keycode: Some(Keycode::S), .. } => chip.keyboard = 0x07,
+              Event::KeyUp { keycode: Some(Keycode::W), .. } => chip.keyboard = 0,
+              Event::KeyUp { keycode: Some(Keycode::A), .. } => chip.keyboard = 0,
+              Event::KeyUp { keycode: Some(Keycode::D), .. } => chip.keyboard = 0,
+              Event::KeyUp { keycode: Some(Keycode::S), .. } => chip.keyboard = 0,
+              _ => (),
+          }
+        }
+
+        //print!("{:#03x} ", count);
         chip.run_address(&memo);
-        count += 1;
         
         if chip.drawop != 0x0000 {
           chip.draw(&mut canvas, &memo);
@@ -331,4 +326,3 @@ fn main() -> io::Result<()> {
     }
     Ok(())
 }
-
