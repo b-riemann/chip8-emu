@@ -1,9 +1,12 @@
 extern crate sdl2;
 
+
 //use std::env;
 use std::io;
 use std::io::prelude::*;
 use std::fs::File;
+
+use rand::prelude::*;
 
 // graphics part
 use sdl2::{pixels::Color, render::Canvas, video::Window, rect::Point};
@@ -17,7 +20,8 @@ struct Chip8State {
     delay: u8,    // delay timer
     keyboard: u8, // hex keyboard
     display: [bool; 2048], // bits of the 32x64 display. the u8s are xor'ed with sprites and thus form a part of the state
-    drawop: u16   // custom: indicate if the content needs to be drawn, and what is drawn. see draw method.
+    drawop: u16,    // custom: indicate if the content needs to be drawn, and what is drawn. see draw method.
+    rng: ThreadRng  // custom: random number generator
 }
 
 
@@ -40,13 +44,14 @@ fn get_00nn(opcode: u16) -> u8 {
 
 impl Chip8State {
     fn init() -> Chip8State {
-        Chip8State { pc: 0x200, i: 0, v: [0; 16], stack: Vec::with_capacity(32), delay: 0, keyboard: 0x00, display: [false; 2048], drawop: 0x0000 }
+        Chip8State { pc: 0x200, i: 0, v: [0; 16], stack: Vec::with_capacity(32),
+                     delay: 0, keyboard: 0x00, display: [false; 2048],
+                     drawop: 0x0000, rng: rand::thread_rng() }
     }
 
     fn get_pixel(&self, x: u8, y: u8) -> bool {
-        if y>32 || x>64 {
-            println!("skipdraw");
-            return false; 
+        if y>31 || x>63 {
+            return false; // never drawn 
         }
         let idx = y as usize*64+x as usize; // idx of a boolean array
         //println!("getp x={}, y={}, idx={}", x, y, idx);
@@ -54,8 +59,8 @@ impl Chip8State {
     }
 
     fn set_pixel(&mut self, x: u8, y: u8, tf: bool) {
-        if y>32 || x>64 {
-            return; 
+        if y>31 || x>63 {
+            panic!("pixel out of range (x={},y={})", x, y); 
         }
         let idx = y as usize*64+x as usize; // idx of a boolean array
         self.display[idx] = tf;
@@ -71,28 +76,29 @@ impl Chip8State {
                 canvas.clear();
             },
             0xd000 => { // 0xdxyn draw in rectangle (original opcode) 
-                let x0 = self.v[get_0x00(self.drawop)] + 8;
+                let x0 = self.v[get_0x00(self.drawop)] + 7;
                 let y0 = self.v[get_00y0(self.drawop)];
                 
-                let h = (self.drawop & 0x000f) as u8+ 1;
+                let h = (self.drawop & 0x000f) as u8;
                 let mut p: u8=0;
-                let mut any_flipped = false;
+                let mut any_flipped_off = false;
                 while p<h {
                   let bitti = memo[self.i as usize +p as usize];
-                  let y = if y0==255 {println!("drawskip");y0} else {y0+p};
+                  
+                  let y = y0+p;
                   let mut q=0;
                   while q<8 {
                     let x = x0-q;
 
                     let flip = (bitti >> q) & 0x01 == 0x01;
+                    let oldstate = self.get_pixel(x,y);
+
+                    
                     if flip {
-                      any_flipped = true;
-                      if self.get_pixel(x,y) {  
-                        canvas.set_draw_color(bgcolor);
-                        self.set_pixel(x,y, false);
-                      } else {
-                        canvas.set_draw_color(fgcolor);
-                        self.set_pixel(x,y, true);
+                      canvas.set_draw_color(if oldstate {bgcolor} else {fgcolor});
+                      self.set_pixel(x,y, !oldstate);
+                      if oldstate {
+                          any_flipped_off = true;
                       }
                       canvas.draw_point(Point::new(x as i32, y as i32)).unwrap();
                     }
@@ -101,7 +107,7 @@ impl Chip8State {
                   }
                   p += 1;
                 }
-                self.v[0xf] = if any_flipped { 1 } else { 0 };
+                self.v[0xf] = if any_flipped_off { 1 } else { 0 };
             },
             _ => panic!("unknown draw operation. skip over all entries not 0xe... or 0xd..."),
         }
@@ -112,32 +118,38 @@ impl Chip8State {
         let uaddr = usize::from(self.pc);
         let opcode = get_opcode(memo[uaddr], memo[uaddr+1]);
 
+        for _ in 0..self.stack.len() {
+          print!("  ");
+        }
+        print!("adr {:#03x} opc {:#06x} ", self.pc, opcode);
+
         match opcode & 0xf000 {
             0x0000 => match opcode {
                          0x00e0 => { 
                              self.drawop = 0xe000;
-                             println!("{:#06x} CLEAR DRAW", opcode);
+                             println!("CLEAR DRAW");
                          },
                          0x00ee => {
                              self.pc = self.stack.pop().unwrap();
-                             println!("{:#06x} return from subroutine (lvl {})", opcode, self.stack.len());
+                             println!("return from subroutine");
                          },
                          _ => panic!("{:#06x} call RCA 1802 routine {:#05x}: not implemented", opcode, opcode & 0x0fff),
                       },
             0x1000 => { 
                          self.pc = opcode & 0x0fff;
-                         println!("{:#06x} goto address {:#05x}", opcode, self.pc);
+                         println!("goto address {:#05x}", self.pc);
                          return;
                       },
             0x2000 => { 
                          self.stack.push(self.pc);
                          self.pc = opcode & 0x0fff;
-                         println!("{:#06x} run subroutine at {:#05x} (lvl {})", opcode, self.pc, self.stack.len());
+                         println!("run subroutine at {:#05x}", self.pc);
+                         return;
                       },
             0x3000 => { 
                          let varnum = get_0x00(opcode);
                          let num = get_00nn(opcode);
-                         println!("{:#06x} if (v{:#03x} == {:#x}) skip next", opcode, varnum, num);
+                         println!("if (v{:#03x} == {:#04x}) skip next (is {:#04x})", varnum, num, self.v[varnum]);
                          if self.v[varnum] == num { 
                              self.pc += 4;
                              return;
@@ -146,7 +158,7 @@ impl Chip8State {
             0x4000 => { 
                          let varnum = get_0x00(opcode);
                          let num = get_00nn(opcode);
-                         println!("{:#06x} if (v{:#03x} != {:#x}) skip next", opcode, varnum, num);
+                         println!("if (v{:#03x} != {:#04x}) skip next (is {:#04x})", varnum, num, self.v[varnum]);
                          if self.v[varnum] != num { 
                              self.pc += 4;
                              return;
@@ -156,51 +168,60 @@ impl Chip8State {
             0x6000 => { 
                          let varnum = get_0x00(opcode);
                          let num = get_00nn(opcode);
-                         println!("{:#06x} v{:#03x} = {:#04x}", opcode, varnum, num);
+                         println!("v{:#03x} = {:#04x}", varnum, num);
                          self.v[varnum] = num;
                       },
             0x7000 => { 
                          let varnum = get_0x00(opcode);
                          let num = get_00nn(opcode);
                          self.v[varnum] = self.v[varnum].wrapping_add(num);
-                         println!("{:#06x} v{:#03x} += {:#04x} ignoring carry (now {:#04x})", opcode, varnum, num, self.v[varnum]);
+                         println!("v{:#03x} += {:#04x} ignoring carry (now {:#04x})", varnum, num, self.v[varnum]);
                       },
             0x8000 => {  let varxnum = get_0x00(self.drawop);
                          let varynum = get_00y0(self.drawop);
                          match opcode & 0xf00f {
                            0x8000 => { self.v[varxnum]  = self.v[varynum];
-                                       println!("{:#06x} v{:#03x} = v{:#03x}", opcode, varxnum, varynum); },
+                                       println!("v{:#03x} = v{:#03x}", varxnum, varynum); },
                            0x8001 => { self.v[varxnum]  = self.v[varxnum] | self.v[varynum];
-                                       println!("{:#06x} v{:#03x} = v{:#03x} | v{:#03x}", opcode, varxnum, varxnum, varynum); },
+                                       println!("v{:#03x} = v{:#03x} | v{:#03x}", varxnum, varxnum, varynum); },
                            0x8002 => { self.v[varxnum]  = self.v[varxnum] & self.v[varynum];
-                                       println!("{:#06x} v{:#03x} = v{:#03x} & v{:#03x}", opcode, varxnum, varxnum, varynum); },
+                                       println!("v{:#03x} = v{:#03x} & v{:#03x}", varxnum, varxnum, varynum); },
                            0x8003 => { self.v[varxnum]  = self.v[varxnum] ^ self.v[varynum];
-                                       println!("{:#06x} v{:#03x} = v{:#03x} ^ v{:#03x}", opcode, varxnum, varxnum, varynum); },
+                                       println!("v{:#03x} = v{:#03x} ^ v{:#03x}", varxnum, varxnum, varynum); },
                            0x8004 => { self.v[varxnum]  = self.v[varxnum] + self.v[varynum]; // self.v[varxnum].wrapping_add( self.v[varynum] );
-                                       println!("{:#06x} v{:#03x} += v{:#03x}", opcode, varxnum, varynum); },
+                                       println!("v{:#03x} += v{:#03x}", varxnum, varynum); },
                            0x8005 => { self.v[varxnum]  = self.v[varxnum] - self.v[varynum]; // self.v[varxnum].wrapping_sub( self.v[varynum] );
-                                       println!("{:#06x} v{:#03x} -= v{:#03x}", opcode, varxnum, varynum); },
-                           // 0x8006 => println!("{:#06x} Vx>>=1", opcode),
+                                       println!("v{:#03x} -= v{:#03x}", varxnum, varynum); },
+                           // 0x8006 => println!("Vx>>=1"),
                            0x8007 => { self.v[varxnum]  = self.v[varynum] - self.v[varxnum]; //self.v[varynum].wrapping_sub( self.v[varxnum] );
-                                       println!("{:#06x} v{:#03x} = v{:#03x} - v{:#03x}", opcode, varxnum, varynum, varxnum); },
-                           // 0x800e => println!("{:#06x} Vx<<=1", opcode),
+                                       println!("v{:#03x} = v{:#03x} - v{:#03x}", varxnum, varynum, varxnum); },
+                           // 0x800e => println!("Vx<<=1"),
                            _ => panic!("{:06x} unknown opcode!", opcode),
                          }
                       },
+            0x9000 => {  let varxnum = get_0x00(self.drawop);
+                         let varynum = get_00y0(self.drawop);
+                         println!("if v{:#03x} != v{:#03x} skip next", varxnum, varynum);
+                         if self.v[varxnum] != self.v[varynum] { 
+                             self.pc += 4;
+                             return;
+                         }
+                      },                         
             0xa000 => {  self.i = opcode & 0x0fff;
-                         println!("{:#06x} i = {:#05x}", opcode, self.i); },
+                         println!("i = {:#05x}", self.i); },
             0xc000 => { let varnum = get_0x00(opcode);
                         let num = get_00nn(opcode);
-                        self.v[varnum] = rand::random::<u8>() & num;
-                        println!("{:#06x} v{:#03x} = rand() & {:#04x} (now {:#04x})", opcode, varnum, num, self.v[varnum]);
+                        let ran: u8 = self.rng.gen();
+                        self.v[varnum] = ran & num;
+                        println!("v{:#03x} = rand() & {:#04x} (now {:#04x})", varnum, num, self.v[varnum]);
                       },
             0xd000 => { self.drawop = opcode;
-                        println!("{:#06x} DRAW", opcode);
+                        println!("DRAW");
                       },
             0xe000 => match opcode  & 0xf0ff {
                          0xe09e => {
                            let varnum = get_0x00(opcode);
-                           println!("{:#06x} if (v{:#03x} == keyboard) skip next", opcode, varnum);
+                           println!("if (v{:#03x} == keyboard) skip next", varnum);
                            if self.keyboard == self.v[varnum] {
                              self.pc += 4;
                              return;
@@ -208,7 +229,7 @@ impl Chip8State {
                          },
                          0xe0a1 => {
                            let varnum = get_0x00(opcode);
-                           println!("{:#06x} if (v{:#03x} != keyboard) skip next", opcode, varnum);
+                           println!("if (v{:#03x} != keyboard) skip next", varnum);
                            if self.keyboard != self.v[varnum] {
                              self.pc += 4;
                              return;
@@ -220,20 +241,20 @@ impl Chip8State {
                          0xf007 => {
                            let varnum = get_0x00(opcode);
                            self.v[varnum] = self.delay; 
-                           println!("{:#06x} set v{:03x} to delay", opcode, varnum)
+                           println!("set v{:03x} to delay", varnum)
                          },
                          0xf015 => {
                            let varnum = get_0x00(opcode);
                            self.delay = self.v[varnum];
-                           println!("{:#06x} set delay to v{:#03x}", opcode, varnum)
+                           println!("set delay to v{:#03x}", varnum)
                          },
                          0xf01e => {
                            let varnum = get_0x00(opcode);
                            if varnum == 0xf {
-                             panic!("VF should not be affected, should this indtruction occur?");
+                             panic!("VF should not be affected, should this instruction occur?");
                            }
                            self.i += u16::from(self.v[varnum]);
-                           println!("{:#06x} i += v{:#03x}", opcode, varnum)
+                           println!("i += v{:#03x} (now {:#05x})", varnum, self.i)
                          },
                          _ => panic!("{:#06x} not implemented", opcode),
                       },
@@ -273,13 +294,13 @@ fn main() -> io::Result<()> {
 
     let sdl_context = sdl2::init().unwrap();
     let video = sdl_context.video().unwrap();
-    let window = video.window(&filename, 128, 64)
+    let window = video.window(&filename, 512, 256)
         //.position_centered()
         .build()
         .unwrap();
 
     let mut canvas = window.into_canvas().build().unwrap();
-    canvas.set_scale(2.0, 2.0).unwrap();
+    canvas.set_scale(8.0, 8.0).unwrap();
 
     let mut chip = Chip8State::init();
 
@@ -290,23 +311,23 @@ fn main() -> io::Result<()> {
 
     let mut count = 0;
     let dur = Duration::new(0, 20_000_000u32); // 50ms
+    //let ldur = Duration::new(0, 100_000_000u32); // 500ms
 
-    while count < 0x0ff {
-        ::std::thread::sleep(dur); 
+    while count < 0xfff {
+        std::thread::sleep(dur); //if count > 0x118 {ldur} else { dur }); 
     
         if chip.delay > 0 {
           chip.delay -= 1;
-          continue;
         }
 
-        while chip.drawop == 0x0000 {
-          print!("{:#03x} addr {:#03x} ", count, chip.pc);
-          chip.run_address(&memo);
-          count += 1;
-        }
+        print!("{:#03x} ", count);
+        chip.run_address(&memo);
+        count += 1;
         
-        chip.draw(&mut canvas, &memo);
-        canvas.present();
+        if chip.drawop != 0x0000 {
+          chip.draw(&mut canvas, &memo);
+          canvas.present();
+        }
     }
     Ok(())
 }
