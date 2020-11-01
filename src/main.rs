@@ -1,18 +1,22 @@
 extern crate sdl2;
 
+//use std::env;
 use std::io;
 use std::io::prelude::*;
 use std::fs::File;
 
 // graphics part
-use sdl2::{pixels::Color, render::Canvas, video::Window, rect::Rect};
+use sdl2::{pixels::Color, render::Canvas, video::Window, rect::Point};
 use std::time::Duration;
 
 struct Chip8State {
+    pc: u16,      // main address register (program counter)
     i: u16,       // additional 16-bit address register
     v: [u8; 16],  // variables v0 -- vF
+    stack: Vec<u16>, // stores registers when (possibly multiple enclosed) subroutines are called
     delay: u8,    // delay timer
     keyboard: u8, // hex keyboard
+    display: [bool; 2048], // bits of the 32x64 display. the u8s are xor'ed with sprites and thus form a part of the state
     drawop: u16   // custom: indicate if the content needs to be drawn, and what is drawn. see draw method.
 }
 
@@ -33,31 +37,79 @@ fn get_00nn(opcode: u16) -> u8 {
    (opcode & 0x00ff) as u8
 }
 
+
 impl Chip8State {
     fn init() -> Chip8State {
-        Chip8State { i: 0, v: [0; 16], delay: 0, keyboard: 0x00, drawop: 0x0000 }
+        Chip8State { pc: 0x200, i: 0, v: [0; 16], stack: Vec::with_capacity(32), delay: 0, keyboard: 0x00, display: [false; 2048], drawop: 0x0000 }
     }
 
-    fn draw(&mut self, canvas: &mut Canvas<Window>) {
+    fn get_pixel(&self, x: u8, y: u8) -> bool {
+        if y>32 || x>64 {
+            println!("skipdraw");
+            return false; 
+        }
+        let idx = y as usize*64+x as usize; // idx of a boolean array
+        //println!("getp x={}, y={}, idx={}", x, y, idx);
+        return self.display[idx]; 
+    }
+
+    fn set_pixel(&mut self, x: u8, y: u8, tf: bool) {
+        if y>32 || x>64 {
+            return; 
+        }
+        let idx = y as usize*64+x as usize; // idx of a boolean array
+        self.display[idx] = tf;
+    }
+
+    fn draw(&mut self, canvas: &mut Canvas<Window>, memo: &[u8; 0xf00]) {
+        let bgcolor = Color::RGB(60,60,60);
+        let fgcolor = Color::RGB(240,255, 255);
         match self.drawop & 0xf000 {// different from orig.opcode 00e0 for faster comparison
             0xe000 => {
-                canvas.set_draw_color(Color::RGB(60,60,60));
+                self.display = [false; 2048];
+                canvas.set_draw_color(bgcolor);
                 canvas.clear();
-                canvas.set_draw_color(Color::RGB(240,255, 255));
             },
-            0xd000 => { // 0xdxyn draw rectangle (original opcode) 
-                let varxnum = get_0x00(self.drawop);
-                let varynum = get_00y0(self.drawop);
-                let h = (self.drawop & 0x000f) as u8 + 1;
-                canvas.fill_rect(Rect::new(self.v[varxnum] as i32, self.v[varynum] as i32, 8, h as u32)).unwrap();
+            0xd000 => { // 0xdxyn draw in rectangle (original opcode) 
+                let x0 = self.v[get_0x00(self.drawop)] + 8;
+                let y0 = self.v[get_00y0(self.drawop)];
+                
+                let h = (self.drawop & 0x000f) as u8+ 1;
+                let mut p: u8=0;
+                let mut any_flipped = false;
+                while p<h {
+                  let bitti = memo[self.i as usize +p as usize];
+                  let y = if y0==255 {println!("drawskip");y0} else {y0+p};
+                  let mut q=0;
+                  while q<8 {
+                    let x = x0-q;
+
+                    let flip = (bitti >> q) & 0x01 == 0x01;
+                    if flip {
+                      any_flipped = true;
+                      if self.get_pixel(x,y) {  
+                        canvas.set_draw_color(bgcolor);
+                        self.set_pixel(x,y, false);
+                      } else {
+                        canvas.set_draw_color(fgcolor);
+                        self.set_pixel(x,y, true);
+                      }
+                      canvas.draw_point(Point::new(x as i32, y as i32)).unwrap();
+                    }
+
+                    q += 1;
+                  }
+                  p += 1;
+                }
+                self.v[0xf] = if any_flipped { 1 } else { 0 };
             },
             _ => panic!("unknown draw operation. skip over all entries not 0xe... or 0xd..."),
         }
         self.drawop = 0x0000;
     }
 
-    fn run_address(&mut self, memo: &[u8; 4096], address: u16) -> u16 {
-        let uaddr = usize::from(address);
+    fn run_address(&mut self, memo: &[u8; 0xf00]) {
+        let uaddr = usize::from(self.pc);
         let opcode = get_opcode(memo[uaddr], memo[uaddr+1]);
 
         match opcode & 0xf000 {
@@ -66,27 +118,29 @@ impl Chip8State {
                              self.drawop = 0xe000;
                              println!("{:#06x} CLEAR DRAW", opcode);
                          },
-                         0x00ee => println!("{:#06x} return", opcode),
+                         0x00ee => {
+                             self.pc = self.stack.pop().unwrap();
+                             println!("{:#06x} return from subroutine (lvl {})", opcode, self.stack.len());
+                         },
                          _ => panic!("{:#06x} call RCA 1802 routine {:#05x}: not implemented", opcode, opcode & 0x0fff),
                       },
             0x1000 => { 
-                         let next_addr = opcode & 0x0fff;
-                         println!("{:#06x} goto address {:#05x}", opcode, next_addr);
-                         return next_addr;
+                         self.pc = opcode & 0x0fff;
+                         println!("{:#06x} goto address {:#05x}", opcode, self.pc);
+                         return;
                       },
             0x2000 => { 
-                         let nother = opcode & 0x0fff;
-                         println!("{:#06x} run subroutine at {:#05x}", opcode, nother);
-                         if self.run_address(memo, nother) != nother+2 {
-                             panic!("no recursion support.");
-                         }
+                         self.stack.push(self.pc);
+                         self.pc = opcode & 0x0fff;
+                         println!("{:#06x} run subroutine at {:#05x} (lvl {})", opcode, self.pc, self.stack.len());
                       },
             0x3000 => { 
                          let varnum = get_0x00(opcode);
                          let num = get_00nn(opcode);
                          println!("{:#06x} if (v{:#03x} == {:#x}) skip next", opcode, varnum, num);
                          if self.v[varnum] == num { 
-                             return address+4;
+                             self.pc += 4;
+                             return;
                          }
                       },
             0x4000 => { 
@@ -94,7 +148,8 @@ impl Chip8State {
                          let num = get_00nn(opcode);
                          println!("{:#06x} if (v{:#03x} != {:#x}) skip next", opcode, varnum, num);
                          if self.v[varnum] != num { 
-                             return address+4;
+                             self.pc += 4;
+                             return;
                          }
                       },
 
@@ -108,7 +163,7 @@ impl Chip8State {
                          let varnum = get_0x00(opcode);
                          let num = get_00nn(opcode);
                          self.v[varnum] = self.v[varnum].wrapping_add(num);
-                         println!("{:#06x} v{:#03x} += {:#04x} (now {:#04x})", opcode, varnum, num, self.v[varnum]);
+                         println!("{:#06x} v{:#03x} += {:#04x} ignoring carry (now {:#04x})", opcode, varnum, num, self.v[varnum]);
                       },
             0x8000 => {  let varxnum = get_0x00(self.drawop);
                          let varynum = get_00y0(self.drawop);
@@ -121,12 +176,12 @@ impl Chip8State {
                                        println!("{:#06x} v{:#03x} = v{:#03x} & v{:#03x}", opcode, varxnum, varxnum, varynum); },
                            0x8003 => { self.v[varxnum]  = self.v[varxnum] ^ self.v[varynum];
                                        println!("{:#06x} v{:#03x} = v{:#03x} ^ v{:#03x}", opcode, varxnum, varxnum, varynum); },
-                           0x8004 => { self.v[varxnum]  = self.v[varxnum].wrapping_add( self.v[varynum] );
+                           0x8004 => { self.v[varxnum]  = self.v[varxnum] + self.v[varynum]; // self.v[varxnum].wrapping_add( self.v[varynum] );
                                        println!("{:#06x} v{:#03x} += v{:#03x}", opcode, varxnum, varynum); },
-                           0x8005 => { self.v[varxnum]  = self.v[varxnum].wrapping_sub( self.v[varynum] );
+                           0x8005 => { self.v[varxnum]  = self.v[varxnum] - self.v[varynum]; // self.v[varxnum].wrapping_sub( self.v[varynum] );
                                        println!("{:#06x} v{:#03x} -= v{:#03x}", opcode, varxnum, varynum); },
                            // 0x8006 => println!("{:#06x} Vx>>=1", opcode),
-                           0x8007 => { self.v[varxnum]  = self.v[varynum].wrapping_sub( self.v[varxnum] );
+                           0x8007 => { self.v[varxnum]  = self.v[varynum] - self.v[varxnum]; //self.v[varynum].wrapping_sub( self.v[varxnum] );
                                        println!("{:#06x} v{:#03x} = v{:#03x} - v{:#03x}", opcode, varxnum, varynum, varxnum); },
                            // 0x800e => println!("{:#06x} Vx<<=1", opcode),
                            _ => panic!("{:06x} unknown opcode!", opcode),
@@ -146,12 +201,18 @@ impl Chip8State {
                          0xe09e => {
                            let varnum = get_0x00(opcode);
                            println!("{:#06x} if (v{:#03x} == keyboard) skip next", opcode, varnum);
-                           if self.keyboard == self.v[varnum] { return address+4; }
+                           if self.keyboard == self.v[varnum] {
+                             self.pc += 4;
+                             return;
+                           }
                          },
                          0xe0a1 => {
                            let varnum = get_0x00(opcode);
                            println!("{:#06x} if (v{:#03x} != keyboard) skip next", opcode, varnum);
-                           if self.keyboard != self.v[varnum] { return address+4; }
+                           if self.keyboard != self.v[varnum] {
+                             self.pc += 4;
+                             return;
+                           }
                          },
                          _ => panic!("{:06x} unknown opcode!", opcode),
                       },
@@ -168,6 +229,9 @@ impl Chip8State {
                          },
                          0xf01e => {
                            let varnum = get_0x00(opcode);
+                           if varnum == 0xf {
+                             panic!("VF should not be affected, should this indtruction occur?");
+                           }
                            self.i += u16::from(self.v[varnum]);
                            println!("{:#06x} i += v{:#03x}", opcode, varnum)
                          },
@@ -176,7 +240,7 @@ impl Chip8State {
             _ => panic!("{:#06x} not implemented", opcode),
         }
 
-        return address+2
+        self.pc += 2;
     }
 
 
@@ -187,9 +251,9 @@ fn main() -> io::Result<()> {
 
     let mut file = File::open(filename)?;
 
-    let mut memo: [u8; 4096] = [0; 4096];
+    let mut memo: [u8; 0xf00] = [0; 0xf00]; 
     
-    //let bu = file.read(&mut memo)?; // maybe we need an offset here!, 0x200?
+    //file.read(&mut memo)?; // maybe we need an offset here!, 0x200?
     file.read(&mut memo[0x200..])?; // maybe we need an offset here!, 0x200?
 
 
@@ -209,25 +273,26 @@ fn main() -> io::Result<()> {
 
     let sdl_context = sdl2::init().unwrap();
     let video = sdl_context.video().unwrap();
-    let window = video.window(filename, 512, 512)
-        .position_centered()
+    let window = video.window(&filename, 128, 64)
+        //.position_centered()
         .build()
         .unwrap();
 
     let mut canvas = window.into_canvas().build().unwrap();
-
+    canvas.set_scale(2.0, 2.0).unwrap();
 
     let mut chip = Chip8State::init();
 
     chip.drawop = 0xe000; // clear screen drawing command
-    chip.draw(&mut canvas);
+    chip.draw(&mut canvas, &memo);
 
     canvas.present();
 
-    let mut address: u16 = 0x200;
     let mut count = 0;
-    while count < 5000 {
-        ::std::thread::sleep(Duration::new(0, 20_000_000u32)); // 20ms
+    let dur = Duration::new(0, 20_000_000u32); // 50ms
+
+    while count < 0x0ff {
+        ::std::thread::sleep(dur); 
     
         if chip.delay > 0 {
           chip.delay -= 1;
@@ -235,16 +300,14 @@ fn main() -> io::Result<()> {
         }
 
         while chip.drawop == 0x0000 {
-          print!("  address {:#03x} ", address);
-          address = chip.run_address(&memo, address);
+          print!("{:#03x} addr {:#03x} ", count, chip.pc);
+          chip.run_address(&memo);
           count += 1;
         }
         
-        // println!("processed {} instructions since last draw", c);
-        chip.draw(&mut canvas);
+        chip.draw(&mut canvas, &memo);
         canvas.present();
     }
-
     Ok(())
 }
 
