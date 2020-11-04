@@ -203,8 +203,12 @@ impl Chip8State {
                                        let borrow = (newnum & 0xff00) > 0;
                                        self.v[0xf] = if borrow { 1 } else {0};
                                        self.v[varxnum] = (newnum & 0x00ff) as u8;
-                                       stri.push_str(&format!("v{:#03x} -= v{:#03x}", varxnum, varynum)); },
-                           // 0x8006 => stri = pref + format!("Vx>>=1"),
+                                       stri.push_str(&format!("v{:#03x} -= v{:#03x}", varxnum, varynum));
+                                     },
+                           0x8006 => { self.v[0xf] = self.v[varxnum] & 0x01;
+                                       self.v[varxnum] = self.v[varxnum] >> 1;
+                                       stri.push_str(&format!("v{:#03x} >> 1 (store lost bit in v0xf)", varxnum));
+                                     },
                            0x8007 => { self.v[varxnum]  = self.v[varynum] - self.v[varxnum]; //self.v[varynum].wrapping_sub( self.v[varxnum] );
                                        stri.push_str(&format!("v{:#03x} = v{:#03x} - v{:#03x}", varxnum, varynum, varxnum)); },
                            // 0x800e => stri = pref + format!("Vx<<=1"),
@@ -263,6 +267,7 @@ impl Chip8State {
                            self.delay = self.v[varnum];
                            stri.push_str(&format!("set delay to v{:#03x}", varnum))
                          },
+                         0xf018 => { println!("SOUND timer=v0x. (not implemented)"); },
                          0xf01e => {
                            let varnum = get_0x00(opcode);
                            if varnum == 0xf {
