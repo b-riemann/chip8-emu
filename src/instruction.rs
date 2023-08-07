@@ -17,7 +17,7 @@ impl fmt::Display for Varset {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub enum Operation {
     Set,
     IncrementNoCarry,
@@ -33,6 +33,7 @@ pub enum Operation {
     SpriteMultiply
 }
 
+#[derive(Clone)]
 pub enum Instruction {
     RCARoutine(u16),
 
@@ -121,6 +122,14 @@ impl fmt::Display for Instruction {
     }
   }
 }
+
+// pub fn changes_display(instruction: Instruction) -> bool {
+//   match instruction {
+//     Instruction::ClearDraw => true,
+//     Instruction::DrawSpriteXYH(_,_ ,_ ) => true,
+//     _ => false
+//   }
+// }
 
 pub fn from_opcode(opcode: u16) -> Instruction {
   match opcode {

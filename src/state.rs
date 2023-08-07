@@ -12,7 +12,7 @@ pub struct TermDisplay {
 
 impl TermDisplay {
   const WIDTH_PX : u8 = 64;
-  const HEIGHT_PX : u8 = 32;
+  pub const HEIGHT_PX : u8 = 32;
 }
 
 impl TermDisplay {
@@ -64,7 +64,7 @@ pub struct Register {
     v: [u8; 16],  // variables v0 -- vF
     delay: u8,    // delay timer
     sound: u8,
-    keyboard: u8, // hex keyboard
+    pub keyboard: u8, // hex keyboard
 }
 
 impl Register {
