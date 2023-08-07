@@ -1,17 +1,9 @@
 use std::env;
-use std::io;
 use std::io::Write;
 use std::fs::OpenOptions;
-use std::time::Instant;
+use std::time::{Duration,Instant};
 
 mod instruction;
-use crossterm::QueueableCommand;
-use crossterm::cursor::MoveTo;
-use crossterm::style;
-use crossterm::terminal::Clear;
-use crossterm::terminal::ClearType;
-use crossterm::Result;
-use crossterm::terminal::SetSize;
 use instruction::from_opcode;
 
 mod cartridge;
@@ -20,27 +12,14 @@ use cartridge::Cartridge;
 mod state;
 use state::Chip8State;
 
-use crossterm::terminal::enable_raw_mode;
-use crossterm::execute;
-use std::time::Duration;
-use crossterm::event::{poll,read,Event,KeyEvent,KeyEventKind,KeyCode};  
 
-// Unfortunately, in crossterm for Windows API, key releases cannot be detected
-fn check_keypress(mut keyboard: u8, timeout: std::time::Duration) -> u8 {
-  if poll(timeout).unwrap() {
-    match read().unwrap() {
-        Event::Key(KeyEvent { code: KeyCode::Char('w'), kind: KeyEventKind::Press, .. }) => keyboard = 0x04,
-        Event::Key(KeyEvent { code: KeyCode::Char('a'), kind: KeyEventKind::Press, .. }) => keyboard = 0x05,
-        Event::Key(KeyEvent { code: KeyCode::Char('d'), kind: KeyEventKind::Press, .. }) => keyboard = 0x06,
-        Event::Key(KeyEvent { code: KeyCode::Char('s'), kind: KeyEventKind::Press, .. }) => keyboard = 0x07,
-        _ => (),
-    }
-  }
+
+fn check_keypress(keyboard: u8) -> u8 {
   keyboard
 }
 
 
-fn main() -> Result<()> {
+fn main() {
   let mode = "run";
 
   let filename = env::args().nth(1).expect("insert cartridge (.rom file)"); 
@@ -76,29 +55,15 @@ fn main() -> Result<()> {
       }
     },
     "keyboard-test" => {
-      enable_raw_mode().expect("can run in raw mode");
       loop {
-        if poll(Duration::from_millis(500)).unwrap() {
-          let event = read().unwrap();
-          println!("{:?}", event);
-          match event {
-            Event::Key(KeyEvent { code: KeyCode::Char('q'), kind: KeyEventKind::Press, .. }) => break,
-            _ => {}
-          }
+        let now = Instant::now();
+        while now.elapsed() < Duration::from_millis(500) {
+
         }
+        
       }
     },
     _ => {
-      enable_raw_mode().expect("can run in raw mode");
-      let mut stdout = io::stdout();
-      // let backend = CrosstermBackend::new(stdout);
-      // let mut terminal: Terminal<CrosstermBackend<io::Stdout>> = Terminal::new(backend).expect("terminal created");
-
-      execute!(
-        stdout,
-        SetSize(64*2+2+5, 32+2+5),
-        Clear(ClearType::All)
-      ).unwrap();
 
 
       let min_cpu_cycle = Duration::from_micros(10); // 1 MHz..
@@ -113,7 +78,7 @@ fn main() -> Result<()> {
       
       while runtime_now.elapsed() < Duration::from_secs(300) {
 
-        cas.register.keyboard = check_keypress(cas.register.keyboard, min_cpu_cycle);
+        cas.register.keyboard = check_keypress(cas.register.keyboard);
 
         let opcode = cas.cartridge.get_opcode_from(cas.pc).unwrap();
         let instruction = from_opcode( opcode );
@@ -121,7 +86,7 @@ fn main() -> Result<()> {
         if monitor_now.elapsed() > monitor_cycle { //changes_display(instruction.clone()) {
           //execute!(stdout, ScrollDown(32+2)).unwrap();
           //writeln!(stdout, "{6}{0:4}  {1:#06x}  {2:#06x}  {3:♥<4$}{5}", cycle, cas.pc, opcode, "", cas.stack.len(), instruction, cas.display).unwrap();
-          stdout.queue(MoveTo(0,0))?.queue(style::Print(format!("{}",cas.display)))?;
+          
 
           cas.register.keyboard = 0;
           monitor_now = Instant::now();
@@ -139,5 +104,4 @@ fn main() -> Result<()> {
     }
   }
 
-  Ok(())
 }
