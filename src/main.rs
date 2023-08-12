@@ -15,10 +15,10 @@ use state::{Chip8State, TermDisplay};
 
 
 
-fn check_keypress(w: &Window) -> u8 {
-  let mut keyboard = 0u8;
+fn check_keypress(w: &Window) -> Option<u8> {
+  let mut okey = 0u8;
   w.get_keys().iter().for_each(|key|
-    keyboard = match key { // only the last one counts
+    okey = match key { // only the last one counts
         Key::Q => 1,
         Key::W => 2,
         Key::E => 3,
@@ -37,7 +37,7 @@ fn check_keypress(w: &Window) -> u8 {
         _ => 0,
     }
   );
-  keyboard
+  if okey==0u8 {None} else {Some(okey)} 
 }
 
 struct Frame {
@@ -159,7 +159,10 @@ fn main() {
           }
           cycle = 0;
 
-          cas.register.keyboard = check_keypress(&window);
+          match check_keypress(&window) {
+            Some(k) => cas.keyboard.push(k),
+            None => {}
+          }
           window.update_with_buffer(&frame.pixels, frame.width, frame.height).expect("buffer was updated");
           cas.register.tick();
 

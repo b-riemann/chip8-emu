@@ -73,23 +73,39 @@ impl fmt::Display for TermDisplay {
 
 }
 
+pub struct HexKeyboard {
+  states: VecDeque<u8>, // to be consumed by instructions and produced by events
+}
+
+impl HexKeyboard {
+  pub fn new() -> Self {
+    Self { states: VecDeque::new() }
+  }
+
+  pub fn push(&mut self, k: u8) {
+    self.states.push_back(k)
+  }
+
+  pub fn consume(&mut self) -> u8 {
+    match self.states.pop_front() { Some(k) => k, None => 0u8 }
+  }
+}
 
 pub struct Register {
     v: [u8; 16],  // variables v0 -- vF
     delay: u8,    // delay timer
-    sound: u8,
-    pub keyboard: u8, // hex keyboard
+    sound: u8
 }
 
 impl Register {
   fn new() -> Self {
-    Self { v: [0; 16], keyboard: 0, delay: 0, sound: 0 }
+    Self { v: [0; 16], delay: 0, sound: 0 }
   }
 
   pub fn get(&self, vs: Varset) -> u8 {
     match vs {
       Varset::V(vnum) => self.v[vnum as usize],
-      Varset::Keyboard => self.keyboard,
+      Varset::Keyboard => panic!("keyboard is not in register"),
       Varset::DelayTimer => self.delay,
       Varset::SoundTimer => self.sound
     }
@@ -99,18 +115,10 @@ impl Register {
     if self.delay > 0 { self.delay -= 1 }
   }
 
-  fn vars_are_equal(&self, va: Varset, vb: Varset) -> bool {
-    self.get(va) == self.get(vb)
-  }
-
-  fn var_equals_val(&self, vs: Varset, val: u8) -> bool {
-    self.get(vs) == val
-  }
-
   fn set(&mut self, vs: Varset, val: u8) {
     match vs {
       Varset::V(vnum) => self.v[vnum as usize] = val,
-      Varset::Keyboard => self.keyboard = val,
+      Varset::Keyboard => panic!("memory should not set keyboard"),
       Varset::DelayTimer => self.delay = val,
       Varset::SoundTimer => self.sound = val
     }
@@ -158,6 +166,7 @@ pub struct Chip8State {
   i: u16,       // additional 16-bit address register
   pub stack: Vec<u16>, // stores registers when (possibly multiple enclosed) subroutines are called
   pub register: Register,
+  pub keyboard: HexKeyboard,
   pub display: TermDisplay, // bits of the 32x64 display. the u8s are xor'ed with sprites and thus form a part of the state
   pub cartridge: Cartridge,
   rng: ThreadRng,  // custom: random number generator
@@ -167,9 +176,24 @@ pub struct Chip8State {
 impl Chip8State {
   pub fn new(cartridge: Cartridge) -> Self {
       Self { pc: 0x200, i: 0, stack: Vec::with_capacity(32),
-        register: Register::new(), display: TermDisplay::new(),
+        register: Register::new(), keyboard: HexKeyboard::new(), display: TermDisplay::new(),
         cartridge, rng: rand::thread_rng() }
   }
+
+  pub fn get(&mut self, vs: Varset) -> u8 {
+    match vs {
+      Varset::Keyboard => self.keyboard.consume(),
+      _ => self.register.get(vs)
+    }
+  }
+
+  fn var_equals_val(&mut self, vs: Varset, val: u8) -> bool {
+    self.get(vs) == val
+  }
+
+  fn vars_are_equal(&mut self, va: Varset, vb: Varset) -> bool {
+    self.get(va) == self.get(vb)
+  } 
 
   pub fn run_instruction(&mut self, instruction: Instruction) {
     self.pc += 2;
@@ -180,10 +204,10 @@ impl Chip8State {
       Instruction::RunSubroutineAtAdress(address) => {self.stack.push(self.pc); self.pc = address},
       Instruction::ReturnFromSubroutine => self.pc = self.stack.pop().unwrap(),
       
-      Instruction::SkipNextIfVarEq(vs, val) => if self.register.var_equals_val(vs, val) { self.pc += 2 },
-      Instruction::SkipNextIfVarNeq(vs, val) => if !self.register.var_equals_val(vs, val) { self.pc += 2 },
-      Instruction::SkipNextIfVarsEq(va, vb) => if self.register.vars_are_equal(va, vb) { self.pc += 2 },
-      Instruction::SkipNextIfVarsNeq(va, vb) => if !self.register.vars_are_equal(va, vb) { self.pc += 2 },
+      Instruction::SkipNextIfVarEq(vs, val) => if self.var_equals_val(vs, val) { self.pc += 2 },
+      Instruction::SkipNextIfVarNeq(vs, val) => if !self.var_equals_val(vs, val) { self.pc += 2 },
+      Instruction::SkipNextIfVarsEq(va, vb) => if self.vars_are_equal(va, vb) { self.pc += 2 },
+      Instruction::SkipNextIfVarsNeq(va, vb) => if !self.vars_are_equal(va, vb) { self.pc += 2 },
 
       Instruction::VariableOnValue(vs, val, op) => match op {
         Operation::Set => self.register.set(vs, val),
