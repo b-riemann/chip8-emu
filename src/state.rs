@@ -4,44 +4,58 @@ use rand::rngs::ThreadRng;
 use crate::instruction::{Varset, Instruction, Operation};
 use crate::cartridge::Cartridge;
 use std::fmt;
+use std::collections::VecDeque;
 
+#[derive(Clone)]
+struct Position {
+  x: u8,
+  y: u8
+}
+
+pub struct PixelEvent {
+  pub x: u8,
+  pub y: u8,
+  pub on: bool,
+  pub clear_all: bool
+}
 
 pub struct TermDisplay {
-  display: [bool; 64*32]
+  display: [bool; 64*32],
+  pub flips: VecDeque<PixelEvent>
 }
 
 impl TermDisplay {
-  const WIDTH_PX : u8 = 64;
+  pub const WIDTH_PX : u8 = 64;
   pub const HEIGHT_PX : u8 = 32;
 }
 
 impl TermDisplay {
   fn new() -> Self {
-    Self { display: [false; 64*32] }
+    Self { display: [false; 64*32], flips: VecDeque::new() }
   }
 
   fn clear(&mut self) {
     self.display.fill( false );
   }
 
-  fn get_idx(x: u8, y: u8) -> usize {
-    let y_rollaround = (y & 0x1f) as usize; // mod 32 
-    let x_rollaround = (x & 0x3f) as usize; // mod 64
+  fn get_idx(p: Position) -> usize {
+    let y_rollaround = (p.y & 0x1f) as usize; // mod 32 
+    let x_rollaround = (p.x & 0x3f) as usize; // mod 64
 
     y_rollaround*(Self::WIDTH_PX as usize) + x_rollaround
   }
 
-  fn get_pixel(&self, x: u8, y: u8) -> bool {
-    let idx = Self::get_idx(x,y);
+  fn get_pixel(&self, p: Position) -> bool {
+    let idx = Self::get_idx(p);
     self.display[idx]   
   }
 
-  fn get_character(&self, x: u8, y: u8) -> &str {
-    if self.get_pixel(x, y) { "██" } else { "  " }
+  fn get_character(&self, p: Position) -> &str {
+    if self.get_pixel(p) { "██" } else { "  " }
   }
 
-  fn set_pixel(&mut self, x: u8, y: u8, tf: bool) {
-    let idx = Self::get_idx(x,y);
+  fn set_pixel(&mut self, p: Position, tf: bool) {
+    let idx = Self::get_idx(p);
     self.display[idx] = tf
   }
 }
@@ -50,7 +64,7 @@ impl fmt::Display for TermDisplay {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     for y in 0..Self::HEIGHT_PX {
       for x in 0..Self::WIDTH_PX {
-        write!(f, "{}", self.get_character(x, y)).unwrap();
+        write!(f, "{}", self.get_character(Position { x, y })).unwrap();
       }
       write!(f, "\n").unwrap();
     }
@@ -107,6 +121,13 @@ impl Register {
     self.set(vs, new_val)
   }
 
+  fn inc_withcarry(&mut self, vs: Varset, val: u8) {
+    let new_val = self.get(vs.clone()) as u16 + val as u16;
+    let carry = (new_val & 0xff00) > 0;
+    self.set(Varset::V(0xf),  if carry { 1 } else { 0 });
+    self.set(vs, (new_val & 0x00ff) as u8)
+  }
+
   fn set_to_var(&mut self, vs: Varset, vi: Varset) {
     self.set(vs, self.get(vi));
   }
@@ -118,7 +139,7 @@ impl Register {
   }
 
   fn decrement_with_borrow(&mut self, vs: Varset, vi: Varset) {
-    let val = self.get(vs.clone()) as u16 - self.get(vi) as u16;
+    let val = (self.get(vs.clone()) as u16).wrapping_sub( self.get(vi) as u16 );
     let borrow = (val & 0xff00) > 0;
     self.set(Varset::V(0xf),  if borrow { 1 } else { 0 });
     self.set(vs, (val & 0x00ff) as u8)
@@ -176,6 +197,7 @@ impl Chip8State {
       Instruction::VariableOnVariable(vs, vi, op) => match op {
         Operation::Set => self.register.set_to_var(vs, vi),
         Operation::IncrementNoCarry => self.register.inc_nocarry(vs, self.register.get(vi)),
+        Operation::IncrementWithCarry => self.register.inc_withcarry(vs, self.register.get(vi)),
         Operation::DecrementAndFlip => self.register.decrement_and_flip(vs, vi),
         Operation::DecrementWithBorrow => self.register.decrement_with_borrow(vs, vi),
         Operation::BitOr => self.register.set(vs.clone(), self.register.get(vs) | self.register.get(vi)),
@@ -223,7 +245,7 @@ impl Chip8State {
         }
       },
 
-      Instruction::ClearDraw => self.display.clear(),
+      Instruction::ClearDraw => {self.display.clear(); self.display.flips.push_back(PixelEvent { x: 0, y: 0, on: false, clear_all: true }) },
       Instruction::DrawSpriteXYH(vx, vy, h) => {
         let x0 = self.register.get(vx) + 7;
         let y0 = self.register.get(vy);
@@ -239,8 +261,13 @@ impl Chip8State {
             let flip = (bitti >> q) & 0x01 == 0x01;
 
             if flip {
-              let oldstate = self.display.get_pixel(x,y);
-              self.display.set_pixel(x,y, !oldstate);
+              //ToDo: display.flip_pixel(x,y) -> any_flipped_off
+              let p = Position{x,y};
+              let oldstate = self.display.get_pixel(p.clone());
+
+              self.display.flips.push_back(PixelEvent { x, y, on: !oldstate, clear_all: false });
+
+              self.display.set_pixel(p, !oldstate);
               if oldstate {
                   any_flipped_off = true;
               }
