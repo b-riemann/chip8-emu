@@ -13,8 +13,6 @@ mod state;
 use minifb::{Window, WindowOptions,Key};
 use state::{Chip8State, TermDisplay};
 
-
-
 fn check_keypress(w: &Window) -> Option<u8> {
   let mut okey = 0u8;
   w.get_keys().iter().for_each(|key|
@@ -105,20 +103,9 @@ fn main() {
         }
       }
     },
-    "keyboard-test" => {
-      loop {
-        let now = Instant::now();
-        while now.elapsed() < Duration::from_millis(500) {
-
-        }
-        
-      }
-    },
     _ => {
-      //let min_cpu_cycle = Duration::from_nanos(588); // ~1.76 MHz, cosmac vp
-
-      let frame_duration = Duration::from_millis(17); //~ 60Hz
-      let cpu_cycles_per_monitor = 28_911;
+      let frame_duration = Duration::from_micros(16_666);
+      let cpu_cycles_per_frame = 29_333u16; // ~1.76 MHz, cosmac vp
 
       let pix_height: usize = 14;
       let pix_width: usize = 16;
@@ -129,30 +116,30 @@ fn main() {
       let mut frame = Frame::new((TermDisplay::WIDTH_PX as usize)*pix_width, (TermDisplay::HEIGHT_PX as usize)*pix_height);
       let mut window = Window::new("chip8-emu", frame.width, frame.height, WindowOptions::default()).expect("window created");
       
-      let mut cycle=0;
+      let mut cycle = 0u16;
       let mut monitor_now = Instant::now();
       let mut monitor_remaining = frame_duration;
 
       while window.is_open() {
+        cycle += 1;
         loop {
           match cas.display.flips.pop_front() {
             Some(p) => if p.clear_all {frame.clear()} else { frame.draw_rectangle((p.x as usize)*pix_width,  (p.y as usize)*pix_height, pix_width, pix_height, if p.on { color } else {0u32} ) },
             None => break
           }
         }
-        cycle += 1;
 
         let opcode = cas.cartridge.get_opcode_from(cas.pc).unwrap();
         let instruction = from_opcode( opcode );
 
-        if cycle >= cpu_cycles_per_monitor {
+        if cycle >= cpu_cycles_per_frame {
           loop {
             let monitor_elapsed = monitor_now.elapsed();
             if monitor_elapsed < monitor_remaining {
-              std::thread::sleep(monitor_remaining-monitor_elapsed)
+              std::thread::sleep(monitor_remaining - monitor_elapsed)
             } else {
-              let tau = monitor_elapsed-monitor_remaining;
-              monitor_remaining = if frame_duration > tau { frame_duration-tau } else { Duration::from_millis(0) };
+              let tau = monitor_elapsed - monitor_remaining;
+              monitor_remaining = if frame_duration > tau { frame_duration - tau } else { Duration::from_millis(0) };
               monitor_now = Instant::now();
               break
             }
@@ -165,8 +152,6 @@ fn main() {
           }
           window.update_with_buffer(&frame.pixels, frame.width, frame.height).expect("buffer was updated");
           cas.register.tick();
-
-          //println!("{:6.2} ms", Duration::as_micros(&monitor_remaining) as f64 / 1000.0);
         }
 
         cas.run_instruction(instruction);
