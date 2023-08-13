@@ -54,53 +54,46 @@ fn main() {
       let frame_duration = Duration::from_micros(16_666);
       let cpu_cycles_per_frame = 29_333u16; // ~1.76 MHz, cosmac vp
 
-      let pix_height: usize = 14;
-      let pix_width: usize = 16;
-      let color = 93000u32;
-
       let mut cas = Chip8State::new(cartridge);
 
-      let mut cwin = Chip8Window::new((TermDisplay::WIDTH_PX as usize)*pix_width, (TermDisplay::HEIGHT_PX as usize)*pix_height);
-      let mut cycle = 0u16;
+      let mut cwin = Chip8Window::new(TermDisplay::WIDTH_PX as usize, TermDisplay::HEIGHT_PX as usize);
       let mut monitor_now = Instant::now();
       let mut monitor_remaining = frame_duration;
 
       while cwin.is_active() {
-        cycle += 1;
-        loop {
-          match cas.display.flips.pop_front() {
-            Some(p) => if p.clear_all {cwin.clear()} else { cwin.draw_rectangle((p.x as usize)*pix_width,  (p.y as usize)*pix_height, pix_width, pix_height, if p.on { color } else {0u32} ) },
-            None => break
-          }
-        }
 
-        let opcode = cas.cartridge.get_opcode_from(cas.pc).unwrap();
-        let instruction = from_opcode( opcode );
-
-        if cycle >= cpu_cycles_per_frame {
+        for _ in 0..cpu_cycles_per_frame {
           loop {
-            let monitor_elapsed = monitor_now.elapsed();
-            if monitor_elapsed < monitor_remaining {
-              std::thread::sleep(monitor_remaining - monitor_elapsed)
-            } else {
-              let tau = monitor_elapsed - monitor_remaining;
-              monitor_remaining = if frame_duration > tau { frame_duration - tau } else { Duration::from_millis(0) };
-              monitor_now = Instant::now();
-              break
+            match cas.display.flips.pop_front() {
+              Some(p) => cwin.draw_pixel(&p),
+              None => break
             }
           }
-          cycle = 0;
 
-          match cwin.check_keypress() {
-            Some(k) => cas.keyboard.push(k),
-            None => {}
-          }
-          // ToDo: impl a new trait for window that uses frame instead?
-          cwin.update_window();
-          cas.register.tick();
+          let opcode = cas.cartridge.get_opcode_from(cas.pc).unwrap();
+          let instruction = from_opcode( opcode );
+          cas.run_instruction(instruction);
         }
 
-        cas.run_instruction(instruction);
+        loop {
+          let monitor_elapsed = monitor_now.elapsed();
+          if monitor_elapsed < monitor_remaining {
+            std::thread::sleep(monitor_remaining - monitor_elapsed)
+          } else {
+            let tau = monitor_elapsed - monitor_remaining;
+            monitor_remaining = if frame_duration > tau { frame_duration - tau } else { Duration::from_millis(0) };
+            monitor_now = Instant::now();
+            break
+          }
+        }
+
+        match cwin.check_keypress() {
+          Some(k) => cas.keyboard.push(k),
+          None => {}
+        }
+        
+        cwin.update_window();
+        cas.register.tick();
       }
     }
   }

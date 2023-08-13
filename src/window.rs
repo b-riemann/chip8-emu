@@ -1,5 +1,7 @@
 use minifb::{Window, WindowOptions, Key};
 
+use crate::state::PixelEvent;
+
 pub struct Chip8Window {
     pixels: Vec<u32>,
     width: usize,
@@ -8,9 +10,16 @@ pub struct Chip8Window {
 }
   
 impl Chip8Window {
-    pub fn new(width: usize, height: usize) -> Self {
+    const BG_COLOR : u32 =  29 << 8 |  31 << 4 |  38; //R,G,B
+    const FG_COLOR : u32 = 240 << 8 | 255 << 4 | 255;
+    const PIX_HEIGHT: usize = 14;
+    const PIX_WIDTH: usize = 16;
+
+    pub fn new(width_px: usize, height_px: usize) -> Self {
+        let width = width_px * Self::PIX_WIDTH;
+        let height = height_px * Self::PIX_HEIGHT; 
         Self {
-            pixels: vec![0u32; width*height],
+            pixels: vec![Self::BG_COLOR; width*height],
             width,
             height,
             w: Window::new("chip8-emu", width, height, WindowOptions::default()).expect("window created")
@@ -21,7 +30,7 @@ impl Chip8Window {
         x + y*self.width
     }
 
-    pub fn draw_rectangle(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
+    fn draw_rectangle(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
         for l in y..y+h {
         let start_idx = self.get_idx(x, l);
         for i in start_idx..start_idx+w {
@@ -30,8 +39,16 @@ impl Chip8Window {
         }
     }
 
-    pub fn clear(&mut self) {
-        self.pixels.fill(0);
+    pub fn draw_pixel(&mut self, p: &PixelEvent) {
+        if p.clear_all {
+            self.clear()
+        } else {
+            self.draw_rectangle((p.x as usize)*Self::PIX_WIDTH,  (p.y as usize)*Self::PIX_HEIGHT, Self::PIX_WIDTH, Self::PIX_HEIGHT, if p.on { Self::FG_COLOR } else { Self::BG_COLOR } )
+        }
+    }
+
+    fn clear(&mut self) {
+        self.pixels.fill(Self::BG_COLOR);
     }
 
     pub fn update_window(&mut self) {
