@@ -41,7 +41,7 @@ fn main() {
         if opcode & 0xf000 == 0xd000 {
           write!(outfile, "{}", cas.display).unwrap();
         } else {
-          writeln!(outfile, "{0:4}  {1:#06x}  {2:#06x}  {3:♥<4$}{5}", cycle, cas.pc, opcode, "", cas.stack.len(), instr).unwrap();
+          writeln!(outfile, "{:4} opcode:{:#06x} {} {}", cycle, opcode, cas, instr).unwrap();
         }
 
         cas.run_instruction(instr);

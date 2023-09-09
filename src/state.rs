@@ -164,12 +164,18 @@ impl Register {
 pub struct Chip8State {
   pub pc: u16,      // main address register (program counter)
   i: u16,       // additional 16-bit address register
-  pub stack: Vec<u16>, // stores registers when (possibly multiple enclosed) subroutines are called
+  stack: Vec<u16>, // stores registers when (possibly multiple enclosed) subroutines are called
   pub register: Register,
   pub keyboard: HexKeyboard,
   pub display: TermDisplay, // bits of the 32x64 display. the u8s are xor'ed with sprites and thus form a part of the state
   pub cartridge: Cartridge,
   rng: ThreadRng,  // custom: random number generator
+}
+
+impl fmt::Display for Chip8State {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "pc:{0:#06x} subr:{1:♥<2$}", self.pc, "", self.stack.len())
+  }
 }
 
 
