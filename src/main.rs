@@ -46,7 +46,7 @@ fn main() {
 
         cas.run_instruction(instr);
         if cycle % 4 == 0 {
-          cas.register.tick()
+          cas.tick()
         }
       }
     },
@@ -93,7 +93,7 @@ fn main() {
         }
         
         cwin.update_window();
-        cas.register.tick();
+        cas.tick();
       }
     }
   }

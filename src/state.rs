@@ -91,7 +91,7 @@ impl HexKeyboard {
   }
 }
 
-pub struct Register {
+struct Register {
     v: [u8; 16],  // variables v0 -- vF
     delay: u8,    // delay timer
     sound: u8
@@ -109,10 +109,6 @@ impl Register {
       Varset::DelayTimer => self.delay,
       Varset::SoundTimer => self.sound
     }
-  }
-
-  pub fn tick(&mut self) {
-    if self.delay > 0 { self.delay -= 1 }
   }
 
   fn set(&mut self, vs: Varset, val: u8) {
@@ -165,7 +161,7 @@ pub struct Chip8State {
   pub pc: u16,      // main address register (program counter)
   i: u16,       // additional 16-bit address register
   stack: Vec<u16>, // stores registers when (possibly multiple enclosed) subroutines are called
-  pub register: Register,
+  register: Register,
   pub keyboard: HexKeyboard,
   pub display: TermDisplay, // bits of the 32x64 display. the u8s are xor'ed with sprites and thus form a part of the state
   pub cartridge: Cartridge,
@@ -191,6 +187,11 @@ impl Chip8State {
       Varset::Keyboard => self.keyboard.consume(),
       _ => self.register.get(vs)
     }
+  }
+
+  pub fn tick(&mut self) {
+    let delay = self.register.get(Varset::DelayTimer);
+    if delay > 0 { self.register.set(Varset::DelayTimer, delay-1) }
   }
 
   fn var_equals_val(&mut self, vs: Varset, val: u8) -> bool {
